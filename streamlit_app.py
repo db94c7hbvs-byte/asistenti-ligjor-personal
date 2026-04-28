@@ -5,7 +5,7 @@ from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chains import RetrievalQA
+from langchain_chains import create_retrieval_chain
 
 # Konfigurimi
 GROQ_API_KEY = "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" 
