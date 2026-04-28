@@ -1,36 +1,69 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+
+# Importet e sakta
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chains import create_retrieval_chain
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
 
-# Konfigurimi
-GROQ_API_KEY = "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" 
-TARGET_URL = "https://rks-gov.net" 
+# Marrja e API Key nga Secrets
+if "GROQ_API_KEY" in st.secrets:
+    api_key = st.secrets["GROQ_API_KEY"]
+else:
+    st.error("Gabim: API Key nuk u gjet! Shtoje te Settings > Secrets në Streamlit Cloud.")
+    st.stop()
 
 st.set_page_config(page_title="Asistenti Ligjor", page_icon="⚖️")
-st.title("⚖️ Law AI Kosova (Personal)")
+st.title("⚖️ Law AI Kosova")
 
+# Funksioni për scraping
 @st.cache_data(ttl=600)
-def get_data(url):
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    res = requests.get(url, headers=headers)
-    soup = BeautifulSoup(res.text, 'html.parser')
-    return soup.get_text()
+def fetch_legal_content():
+    try:
+        url = "https://rks-gov.net"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        return soup.get_text(separator=' ')
+    except Exception as e:
+        return f"Gabim gjatë marrjes së të dhënave: {e}"
 
-raw_text = get_data(TARGET_URL)
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-chunks = text_splitter.split_text(raw_text)
+# Ndërtimi i sistemit AI
+with st.spinner("Duke procesuar ligjet e fundit..."):
+    text_data = fetch_legal_content()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    docs = splitter.create_documents([text_data])
+    
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_documents(docs, embeddings)
+    
+    llm = ChatGroq(groq_api_key=api_key, model_name="llama3-8b-8192")
 
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vector_db = FAISS.from_texts(chunks, embeddings)
-llm = ChatGroq(groq_api_key=GROQ_API_KEY, model_name="llama3-8b-8192")
-qa = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=vector_db.as_retriever())
+    prompt = ChatPromptTemplate.from_template("""
+    Je një asistent ligjor profesional për ligjet e Kosovës. 
+    Përgjigju vetëm në gjuhën shqipe duke u bazuar në këtë kontekst:
+    <context>
+    {context}
+    </context>
+    Pyetja: {input}
+    """)
 
-query = st.text_input("Pyetja juaj ligjore:")
+    combine_docs_chain = create_stuff_documents_chain(llm, prompt)
+    retrieval_chain = create_retrieval_chain(vectorstore.as_retriever(), combine_docs_chain)
+
+# Interface
+query = st.text_input("Pyetni diçka për ligjet e fundit (Gazeta Zyrtare):")
+
 if query:
-    response = qa.invoke(query)
-    st.info(response['result'])
+    with st.spinner("Duke kërkuar përgjigjen..."):
+        try:
+            response = retrieval_chain.invoke({"input": query})
+            st.markdown("### Përgjigjja:")
+            st.info(response["answer"])
+        except Exception as e:
+            st.error(f"Ndodhi një gabim: {e}")
